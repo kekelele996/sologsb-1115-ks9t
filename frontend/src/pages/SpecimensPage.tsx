@@ -43,7 +43,9 @@ export default function SpecimensPage(): JSX.Element {
 
   const exportList = (): void => {
     const rows = filtered.map((item: Specimen) => ({
-      code: item.code,
+      accessionNo: item.accessionNo,
+      team: item.team,
+      fieldNo: item.fieldNo,
       taxon: specimenTaxon(item),
       site: siteMap.get(item.siteId)?.name ?? '',
       collectDate: item.collectDate,
@@ -53,7 +55,9 @@ export default function SpecimensPage(): JSX.Element {
       determiner: item.determiner
     }))
     downloadCsv('标本清单.csv', rows as unknown as Record<string, unknown>[], [
-      { key: 'code', label: '标本编号' },
+      { key: 'accessionNo', label: '馆藏号' },
+      { key: 'team', label: '采集队' },
+      { key: 'fieldNo', label: '现场编号' },
       { key: 'taxon', label: '分类阶元' },
       { key: 'site', label: '采集地' },
       { key: 'collectDate', label: '采集日期' },
@@ -72,7 +76,7 @@ export default function SpecimensPage(): JSX.Element {
         <div>
           <h1 className="page-title">标本清单</h1>
           <p className="page-sub">
-            按目/科、鉴定状态与采集日期区间筛选，多选后可批量推进鉴定状态；编号规则为「采集地代码-年份-流水号」。
+            按目/科、鉴定状态与采集日期区间筛选，多选后可批量推进鉴定状态；馆方编目、柜位与导出一律以馆藏号为准，现场编号仅按采集队留档。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -161,10 +165,10 @@ export default function SpecimensPage(): JSX.Element {
           />
         </div>
         <div className="min-w-[200px] flex-1">
-          <span className="field-label">关键字（编号/学名/暂定名/采集人）</span>
+          <span className="field-label">关键字（馆藏号/现场号/队名/学名/暂定名/采集人）</span>
           <input
             className="field-input"
-            placeholder="如 QLB-2026 / 步甲 / 陆昀"
+            placeholder="如 GB-2026 / 一队-2026 / 步甲 / 陆昀"
             value={filter.keyword}
             onChange={(e) => setFilter({ keyword: e.target.value })}
           />
@@ -212,6 +216,7 @@ export default function SpecimensPage(): JSX.Element {
             specimen={specimen}
             site={siteMap.get(specimen.siteId)}
             selectable
+            editableFieldNo
             selected={selectedSet.has(specimen.id)}
             onToggle={toggle}
             footer={

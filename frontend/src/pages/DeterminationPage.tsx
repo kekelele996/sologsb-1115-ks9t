@@ -7,7 +7,7 @@ import { determinationStore } from '@/stores/determinationStore'
 import { specimenStore } from '@/stores/specimenStore'
 import { siteStore } from '@/stores/siteStore'
 import { downloadCsv } from '@/utils/export'
-import { specimenTaxon } from '@/utils/codec'
+import { specimenTaxon, accessionLabel } from '@/utils/codec'
 import { uid } from '@/utils/id'
 
 const QUEUE_STATUSES: DetStatus[] = ['待鉴定', '初鉴', '待复核']
@@ -19,9 +19,10 @@ export default function DeterminationPage(): JSX.Element {
   const determinations = usePersistentStore(determinationStore, (state) => state.rows)
 
   const queue = useMemo(
-    () => specimens.filter((item) => QUEUE_STATUSES.includes(item.status)),
+    () => specimens.filter((item) => item.accessionNo && QUEUE_STATUSES.includes(item.status)),
     [specimens]
   )
+  const unhandedCount = useMemo(() => specimens.filter((item) => !item.accessionNo).length, [specimens])
   const [activeId, setActiveId] = useState('')
   const active = specimens.find((item) => item.id === activeId) ?? queue[0] ?? null
 
@@ -75,7 +76,7 @@ export default function DeterminationPage(): JSX.Element {
       determiner: determiner.trim()
     })
     setMessage(
-      `${active.code} 已落鉴定记录：${record.conclusion}（置信度 ${record.confidence}，状态更新为${
+      `${accessionLabel(active)} 已落鉴定记录：${record.conclusion}（置信度 ${record.confidence}，状态更新为${
         needReview ? '待复核' : '已鉴定'
       }）`
     )
@@ -89,7 +90,9 @@ export default function DeterminationPage(): JSX.Element {
     const rows = determinations.map((item) => {
       const specimen = specimens.find((sp) => sp.id === item.specimenId)
       return {
-        code: specimen?.code ?? item.specimenId,
+        accessionNo: specimen?.accessionNo ?? '',
+        team: specimen?.team ?? '',
+        fieldNo: specimen?.fieldNo ?? item.specimenId,
         determiner: item.determiner,
         date: item.date,
         conclusion: item.conclusion,
@@ -99,7 +102,9 @@ export default function DeterminationPage(): JSX.Element {
       }
     })
     downloadCsv('鉴定记录.csv', rows as unknown as Record<string, unknown>[], [
-      { key: 'code', label: '标本编号' },
+      { key: 'accessionNo', label: '馆藏号' },
+      { key: 'team', label: '采集队' },
+      { key: 'fieldNo', label: '现场编号' },
       { key: 'determiner', label: '鉴定人' },
       { key: 'date', label: '鉴定日期' },
       { key: 'conclusion', label: '鉴定结论' },
@@ -115,7 +120,7 @@ export default function DeterminationPage(): JSX.Element {
         <div>
           <h1 className="page-title">鉴定工作流</h1>
           <p className="page-sub">
-            待鉴定队列逐条处理：填写结论与依据文献后落鉴定记录，标本状态自动推进为「已鉴定」或「待复核」。
+            待鉴定队列逐条处理：填写结论与依据文献后落鉴定记录，标本状态自动推进为「已鉴定」或「待复核」。队列按馆藏号工作，未交接标本（{unhandedCount} 份）请先到「标本交接台」配对馆藏号。
           </p>
         </div>
         <button className="btn-ghost" type="button" onClick={exportHistory}>
@@ -137,7 +142,7 @@ export default function DeterminationPage(): JSX.Element {
                 }`}
               >
                 <span className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-xs text-field-700">{specimen.code}</span>
+                  <span className="font-mono text-xs text-field-700">{accessionLabel(specimen)}</span>
                   <StatusTag status={specimen.status} />
                 </span>
                 <span className="mt-0.5 block text-xs text-slate-600">{specimenTaxon(specimen)}</span>
@@ -153,7 +158,7 @@ export default function DeterminationPage(): JSX.Element {
         <div className="flex flex-col gap-4">
           <div className="panel">
             <h2 className="text-sm font-semibold text-slate-700">
-              {active ? `处理 ${active.code}` : '请从左侧队列选择标本'}
+              {active ? `处理 ${accessionLabel(active)}` : '请从左侧队列选择标本'}
             </h2>
             {active ? (
               <p className="mt-1 text-xs text-slate-500">
@@ -255,7 +260,7 @@ export default function DeterminationPage(): JSX.Element {
                 const specimen = specimens.find((item) => item.id === record.specimenId)
                 return (
                   <tr key={record.id}>
-                    <td className="border border-slate-200 px-2 py-1 font-mono text-xs">{specimen?.code ?? '—'}</td>
+                    <td className="border border-slate-200 px-2 py-1 font-mono text-xs">{specimen ? accessionLabel(specimen) : '—'}</td>
                     <td className="border border-slate-200 px-2 py-1">{record.determiner}</td>
                     <td className="border border-slate-200 px-2 py-1">{record.date}</td>
                     <td className="border border-slate-200 px-2 py-1">{record.conclusion}</td>

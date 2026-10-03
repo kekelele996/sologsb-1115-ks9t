@@ -58,7 +58,10 @@ export function useSpecimenFilter(specimens: Specimen[]): {
       if (filter.dateTo && item.collectDate > filter.dateTo) return false
       if (keyword) {
         const haystack = [
-          item.code,
+          item.accessionNo,
+          item.fieldNo,
+          ...item.fieldNoHistory.flatMap((change) => [change.from, change.to]),
+          item.team,
           item.order,
           item.family,
           item.genus,

@@ -7,7 +7,7 @@ import { usePersistentStore } from '@/hooks/usePersistentStore'
 import { specimenStore } from '@/stores/specimenStore'
 import { storageStore } from '@/stores/storageStore'
 import { siteStore } from '@/stores/siteStore'
-import { encodeSlot, findSlotConflicts, specimenTaxon, storageSlotText } from '@/utils/codec'
+import { encodeSlot, findSlotConflicts, specimenTaxon, storageSlotText, accessionLabel } from '@/utils/codec'
 import { uid } from '@/utils/id'
 
 /** 保藏柜位图：柜-抽屉-盒-位三级展开，拖拽调整插位，重复占用给出提示 */
@@ -28,10 +28,12 @@ export default function StoragePage(): JSX.Element {
   const [warning, setWarning] = useState('')
   const [detail, setDetail] = useState<Storage | null>(null)
 
-  const codeOf = (specimenId: string): string => specimens.find((item) => item.id === specimenId)?.code ?? '未知'
+  // 柜位只认馆藏号：未交接标本不参与入柜
+  const codeOf = (specimenId: string): string => accessionLabel(specimens.find((item) => item.id === specimenId))
   const siteName = (siteId: string): string => sites.find((site) => site.id === siteId)?.name ?? '未关联采集地'
   const placedIds = useMemo(() => new Set(storages.map((item) => item.specimenId)), [storages])
-  const unplaced = specimens.filter((item) => !placedIds.has(item.id))
+  const unplaced = specimens.filter((item) => item.accessionNo && !placedIds.has(item.id))
+  const unhandedCount = specimens.filter((item) => !item.accessionNo).length
 
   const place = async (position: { cabinet: string; drawer: number; box: number; slot: number }): Promise<void> => {
     const specimenId = dragging ?? picked
@@ -77,7 +79,7 @@ export default function StoragePage(): JSX.Element {
       <header>
         <h1 className="page-title">保藏柜位图</h1>
         <p className="page-sub">
-          按柜—抽屉—盒三级展开插位，空位虚线显示；拖动标本到插位即可入柜，重复占用会列出已有标本。
+          按柜—抽屉—盒三级展开插位，空位虚线显示；拖动标本到插位即可入柜，重复占用会列出已有标本的馆藏号。未交接标本（{unhandedCount} 份）无馆藏号，不参与入柜。
         </p>
       </header>
 
@@ -149,7 +151,7 @@ export default function StoragePage(): JSX.Element {
                     picked === specimen.id ? 'border-field-500 bg-field-50' : 'border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  <p className="font-mono text-field-700">{specimen.code}</p>
+                  <p className="font-mono text-field-700">{accessionLabel(specimen)}</p>
                   <p className="text-slate-600">{specimenTaxon(specimen)}</p>
                   <p className="text-slate-400">
                     {siteName(specimen.siteId)} · <StatusTag status={specimen.status} />

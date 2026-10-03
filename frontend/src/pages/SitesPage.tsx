@@ -71,7 +71,7 @@ export default function SitesPage(): JSX.Element {
       return
     }
     if (sites.some((site) => site.code.toUpperCase() === form.code.trim().toUpperCase() && site.id !== form.id)) {
-      setError(`采集地代码「${form.code}」已存在，请换一个（标本编号依赖它）`)
+      setError(`采集地代码「${form.code}」已存在，请换一个`)
       return
     }
     setError('')

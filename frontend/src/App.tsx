@@ -6,8 +6,9 @@ import { storageStore } from '@/stores/storageStore'
 import { determinationStore } from '@/stores/determinationStore'
 
 const NAV = [
-  { to: '/specimens', label: '标本清单', hint: '筛选 / 批量推进' },
-  { to: '/collect', label: '采集登记', hint: '同批次多份录入' },
+  { to: '/specimens', label: '标本清单', hint: '馆藏号 / 筛选' },
+  { to: '/collect', label: '采集登记', hint: '队名+现场号' },
+  { to: '/handover', label: '标本交接台', hint: '现场号→馆藏号' },
   { to: '/sites', label: '采集地管理', hint: '坐标校验 / 合并' },
   { to: '/determination', label: '鉴定工作流', hint: '待鉴定队列' },
   { to: '/storage', label: '保藏柜位图', hint: '柜-屉-盒-位' }
@@ -21,6 +22,7 @@ export default function AppLayout(): JSX.Element {
   const determinations = usePersistentStore(determinationStore, (state) => state.rows)
 
   const pending = specimens.filter((item) => item.status === '待鉴定').length
+  const unhanded = specimens.filter((item) => !item.accessionNo).length
 
   return (
     <div className="flex min-h-screen">
@@ -58,6 +60,10 @@ export default function AppLayout(): JSX.Element {
           <div className="flex justify-between">
             <dt>待鉴定</dt>
             <dd className="font-semibold">{pending}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt>待交接</dt>
+            <dd className="font-semibold">{unhanded}</dd>
           </div>
           <div className="flex justify-between">
             <dt>采集地</dt>

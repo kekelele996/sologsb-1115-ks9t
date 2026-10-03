@@ -4,7 +4,7 @@ import Dexie, { type Table } from 'dexie'
 import type { CollectSite, Determination, Specimen, Storage } from '@/types'
 
 /** IndexedDB 数据结构版本号 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface MetaRow {
   key: string
@@ -12,7 +12,7 @@ export interface MetaRow {
 }
 
 /** Dexie 封装：标本 / 采集地 / 保藏位置 / 鉴定记录 四张业务表 + 元数据表 */
-class InsectLogDb extends Dexie {
+export class InsectLogDb extends Dexie {
   specimens!: Table<Specimen, string>
   sites!: Table<CollectSite, string>
   storages!: Table<Storage, string>
@@ -29,7 +29,7 @@ class InsectLogDb extends Dexie {
       meta: 'key'
     })
     // v2：新增「采集方式」字段，迁移时为历史标本补齐默认采集方式（扫网）
-    this.version(SCHEMA_VERSION)
+    this.version(2)
       .stores({
         specimens: 'id, code, order, family, status, siteId, collectDate',
         sites: 'id, code, name, habitat',
@@ -45,6 +45,30 @@ class InsectLogDb extends Dexie {
             if (!specimen.method) {
               specimen.method = '扫网'
             }
+          })
+      })
+    // v3：现场编号与馆藏号分离。旧的 code（馆方规则「前缀-年份-流水号」）
+    // 在第一次打开时迁成馆藏号 accessionNo；现场侧字段（team/fieldNo/history）置空，
+    // 由各采集队后续补录，不再与馆藏号挤在一个字段里。
+    this.version(SCHEMA_VERSION)
+      .stores({
+        specimens: 'id, accessionNo, order, family, status, siteId, collectDate, team, fieldNo',
+        sites: 'id, code, name, habitat',
+        storages: 'id, specimenId, cabinet, drawer',
+        determinations: 'id, specimenId, determiner, date',
+        meta: 'key'
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table<Specimen, string>('specimens')
+          .toCollection()
+          .modify((specimen) => {
+            const legacy = (specimen as unknown as { code?: string }).code
+            specimen.accessionNo = specimen.accessionNo || (typeof legacy === 'string' ? legacy : '') || ''
+            specimen.team = specimen.team || ''
+            specimen.fieldNo = specimen.fieldNo || ''
+            specimen.fieldNoHistory = Array.isArray(specimen.fieldNoHistory) ? specimen.fieldNoHistory : []
+            delete (specimen as unknown as { code?: string }).code
           })
       })
   }
@@ -135,7 +159,10 @@ export async function seedDemoData(): Promise<void> {
   await db.specimens.bulkPut([
     {
       id: 'sp_001',
-      code: 'QLB-2026-0001',
+      team: '黔南一队',
+      fieldNo: '黔南-2026-0001',
+      fieldNoHistory: [],
+      accessionNo: 'GB-2026-0001',
       order: '鞘翅目',
       family: '步甲科',
       genus: 'Carabus',
@@ -155,7 +182,10 @@ export async function seedDemoData(): Promise<void> {
     },
     {
       id: 'sp_002',
-      code: 'QLB-2026-0002',
+      team: '黔南一队',
+      fieldNo: '黔南-2026-0011',
+      fieldNoHistory: [{ from: '黔南-2026-0002', to: '黔南-2026-0011', changedAt: today }],
+      accessionNo: 'GB-2026-0002',
       order: '鳞翅目',
       family: '夜蛾科',
       genus: '',
@@ -171,11 +201,14 @@ export async function seedDemoData(): Promise<void> {
       status: '初鉴',
       determiner: '覃羽',
       siteId: 'site_qlb',
-      note: '灯诱 20:30–22:00，翅面有磨损'
+      note: '灯诱 20:30–22:00，翅面有磨损；队里已把现场号 0002 改成 0011，馆藏号不变'
     },
     {
       id: 'sp_003',
-      code: 'SHR-2026-0001',
+      team: '黔南二队',
+      fieldNo: '黔南-2026-0001',
+      fieldNoHistory: [],
+      accessionNo: 'GB-2026-0003',
       order: '蜻蜓目',
       family: '蜻科',
       genus: 'Sympetrum',
@@ -194,8 +227,12 @@ export async function seedDemoData(): Promise<void> {
       note: '与相近种混淆，需核对翅脉'
     },
     {
+      // 尚未交接：只有现场号，等待馆方按「黔南二队 + 黔南-2026-0007」配对
       id: 'sp_004',
-      code: 'SHR-2026-0002',
+      team: '黔南二队',
+      fieldNo: '黔南-2026-0007',
+      fieldNoHistory: [],
+      accessionNo: '',
       order: '双翅目',
       family: '摇蚊科',
       genus: '',
@@ -211,7 +248,31 @@ export async function seedDemoData(): Promise<void> {
       status: '待鉴定',
       determiner: '',
       siteId: 'site_shr',
-      note: '酒精浸液保存，待制片'
+      note: '酒精浸液保存，待制片；一队和二队都编了 黔南-2026-0001，现场号只在队内唯一，交接靠队名区分'
+    },
+    {
+      // 两队现场编号撞号的另一支：同样叫 0001，但队名不同
+      id: 'sp_005',
+      team: '黔南一队',
+      fieldNo: '黔南-2026-0003',
+      fieldNoHistory: [],
+      accessionNo: '',
+      order: '直翅目',
+      family: '蝗科',
+      genus: '',
+      species: '',
+      tempName: '土蝗未定种',
+      collectDate: today,
+      collector: '陆昀',
+      sex: '未知',
+      stage: '成虫',
+      bodyLength: 22.0,
+      method: '扫网',
+      quantity: 1,
+      status: '待鉴定',
+      determiner: '',
+      siteId: 'site_qlb',
+      note: '未交接标本'
     }
   ])
 

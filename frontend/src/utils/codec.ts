@@ -1,47 +1,85 @@
 import type { Specimen, Storage } from '@/types'
 
-/** 标本编号：采集地代码-年份-流水号，如 QLB-2026-0007 */
-export function buildSpecimenCode(siteCode: string, year: number | string, serial: number): string {
-  return `${siteCode.toUpperCase()}-${year}-${String(serial).padStart(4, '0')}`
+/** 馆藏号：前缀-年份-流水号，如 GB-2026-0007（馆方编目规则，与采集队现场编号无关） */
+export function buildAccessionNo(prefix: string, year: number | string, serial: number): string {
+  return `${prefix.toUpperCase()}-${year}-${String(serial).padStart(4, '0')}`
 }
 
-/** 解析标本编号 */
-export function parseSpecimenCode(code: string): { siteCode: string; year: string; serial: number } | null {
+/** 解析馆藏号 */
+export function parseAccessionNo(code: string): { prefix: string; year: string; serial: number } | null {
   const match = /^([A-Za-z0-9]+)-(\d{4})-(\d{3,5})$/.exec(code.trim())
   if (!match) return null
-  return { siteCode: match[1].toUpperCase(), year: match[2], serial: Number(match[3]) }
+  return { prefix: match[1].toUpperCase(), year: match[2], serial: Number(match[3]) }
 }
 
-/** 在已有编号中查重 */
-export function isDuplicateCode(code: string, existing: string[]): boolean {
-  return existing.some((item) => item.trim().toUpperCase() === code.trim().toUpperCase())
+/** 馆藏号是否符合格式 */
+export function isValidAccessionNo(code: string): boolean {
+  return parseAccessionNo(code) !== null
 }
 
-/** 依据已有序号生成下一个流水号 */
-export function nextSerial(siteCode: string, year: number | string, existingCodes: string[]): number {
+/** 馆藏号全局查重（大小写不敏感） */
+export function isDuplicateAccessionNo(code: string, existing: string[]): boolean {
+  const target = code.trim().toUpperCase()
+  return existing.some((item) => item.trim().toUpperCase() === target)
+}
+
+/** 依据已有馆藏号生成某前缀+年份的下一个流水号 */
+export function nextAccessionSerial(prefix: string, year: number | string, existingCodes: string[]): number {
   const serials = existingCodes
-    .map((code) => parseSpecimenCode(code))
-    .filter((parsed): parsed is { siteCode: string; year: string; serial: number } => parsed !== null)
-    .filter((parsed) => parsed.siteCode === siteCode.toUpperCase() && parsed.year === String(year))
+    .map((code) => parseAccessionNo(code))
+    .filter((parsed): parsed is { prefix: string; year: string; serial: number } => parsed !== null)
+    .filter((parsed) => parsed.prefix === prefix.toUpperCase() && parsed.year === String(year))
     .map((parsed) => parsed.serial)
   return serials.length > 0 ? Math.max(...serials) + 1 : 1
 }
 
-/** 生成不与已有编号冲突的标本编号 */
-export function allocateSpecimenCode(
-  siteCode: string,
+/** 生成不与已有馆藏号冲突的新馆藏号 */
+export function allocateAccessionNo(
+  prefix: string,
   year: number | string,
   existingCodes: string[],
   reserved: string[] = []
 ): string {
   const used = [...existingCodes, ...reserved]
-  let serial = nextSerial(siteCode, year, used)
-  let code = buildSpecimenCode(siteCode, year, serial)
-  while (isDuplicateCode(code, used)) {
+  let serial = nextAccessionSerial(prefix, year, used)
+  let code = buildAccessionNo(prefix, year, serial)
+  while (isDuplicateAccessionNo(code, used)) {
     serial += 1
-    code = buildSpecimenCode(siteCode, year, serial)
+    code = buildAccessionNo(prefix, year, serial)
   }
   return code
+}
+
+/**
+ * 采集登记时的现场编号建议：队名简写-年份-流水号（仅建议，采集队可改成自己那套规则）。
+ * 现场编号只在队内查重，因此已有号也按队过滤。
+ */
+export function suggestFieldNo(
+  team: string,
+  year: number | string,
+  specimens: Specimen[],
+  extraFieldNos: string[] = []
+): string {
+  const teamName = team.trim()
+  const short = teamName ? teamName.slice(0, 2) : 'TEMP'
+  const prefix = `${short}-${year}-`
+  const serials = [
+    ...specimens
+      .filter((item) => item.team.trim() === teamName)
+      .flatMap((item) => [item.fieldNo, ...item.fieldNoHistory.map((change) => change.to)]),
+    ...extraFieldNos
+  ]
+    .map((no) => {
+      const match = new RegExp(`^${escapeRegExp(prefix)}(\\d{3,5})$`, 'i').exec(no.trim())
+      return match ? Number(match[1]) : null
+    })
+    .filter((value): value is number => value !== null)
+  const serial = serials.length > 0 ? Math.max(...serials) + 1 : 1
+  return `${prefix}${String(serial).padStart(4, '0')}`
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /** 经纬度格式化：116.4042°E, 39.9136°N */
@@ -85,4 +123,9 @@ export function findSlotConflicts(storages: Storage[], target: Storage): Storage
 export function specimenTaxon(specimen: Specimen): string {
   const parts = [specimen.order, specimen.family, specimen.genus, specimen.species].filter(Boolean)
   return parts.length > 0 ? parts.join(' / ') : specimen.tempName || '未定名'
+}
+
+/** 标本在馆方界面（柜位/鉴定/导出）的主标识：只认馆藏号，未交接给出占位 */
+export function accessionLabel(specimen: Specimen | undefined): string {
+  return specimen?.accessionNo || '未交接'
 }
