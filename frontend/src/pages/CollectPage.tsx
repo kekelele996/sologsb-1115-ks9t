@@ -6,11 +6,13 @@ import SitePicker from '@/components/common/SitePicker'
 import { usePersistentStore } from '@/hooks/usePersistentStore'
 import { specimenStore } from '@/stores/specimenStore'
 import { siteStore } from '@/stores/siteStore'
-import { allocateSpecimenCode, isDuplicateCode } from '@/utils/codec'
+import { isDuplicateFieldNo, suggestFieldNo } from '@/utils/codec'
 import { uid } from '@/utils/id'
 
 interface DraftRow {
   id: string
+  /** 现场编号：各队按自己的规则编，留空提交时采用建议号 */
+  fieldNo: string
   order: string
   family: string
   genus: string
@@ -24,8 +26,9 @@ interface DraftRow {
   note: string
 }
 
-const newDraft = (): DraftRow => ({
+const newDraft = (fieldNo = ''): DraftRow => ({
   id: uid('draft'),
+  fieldNo,
   order: '鞘翅目',
   family: '',
   genus: '',
@@ -39,7 +42,7 @@ const newDraft = (): DraftRow => ({
   note: ''
 })
 
-/** 采集登记：选择采集地后自动带出生境与小生境，支持一次提交多条同批次标本 */
+/** 采集登记：采集队按自己的规则编现场编号；馆藏号在「馆队交接」时才配 */
 export default function CollectPage(): JSX.Element {
   const sites = usePersistentStore(siteStore, (state) => state.rows)
   const specimens = usePersistentStore(specimenStore, (state) => state.rows)
@@ -47,27 +50,41 @@ export default function CollectPage(): JSX.Element {
   const [siteId, setSiteId] = useState('')
   const [collectDate, setCollectDate] = useState(new Date().toISOString().slice(0, 10))
   const [collector, setCollector] = useState('')
+  const [team, setTeam] = useState('')
   const [drafts, setDrafts] = useState<DraftRow[]>([newDraft()])
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [justCreated, setJustCreated] = useState<Specimen[]>([])
 
   const site = sites.find((item) => item.id === siteId)
-  const year = collectDate.slice(0, 4) || String(new Date().getFullYear())
 
-  /** 每行自动生成互不冲突的标本编号（采集地代码-年份-流水号） */
-  const codes = useMemo(() => {
-    const existing = specimens.map((item) => item.code)
-    const reserved: string[] = []
+  /** 每一行最终使用的现场编号：手填优先，空行用队内建议号；同批内自动占位不撞号 */
+  const resolvedFieldNos = useMemo(() => {
     const result: Record<string, string> = {}
+    const used: string[] = []
+    const teamKeys = specimens
+      .filter((sp) => sp.team.trim() === team.trim())
+      .map((sp) => sp.fieldNo.trim())
+    const base = suggestFieldNo(team, specimens)
     drafts.forEach((draft) => {
-      const code = allocateSpecimenCode(site?.code ?? 'TMP', year, existing, reserved)
-      reserved.push(code)
-      result[draft.id] = code
+      const trimmed = draft.fieldNo.trim()
+      if (trimmed) {
+        result[draft.id] = trimmed
+        used.push(trimmed)
+        return
+      }
+      // 空行：从队内现号 + 本批已占用号里递推一个纯数字建议号
+      let candidate = base
+      const occupied = teamKeys.concat(used)
+      while (occupied.indexOf(candidate) !== -1) {
+        const nextNum = Number(candidate) + 1
+        candidate = String(nextNum).padStart(candidate.length, '0')
+      }
+      result[draft.id] = candidate
+      used.push(candidate)
     })
     return result
-    // drafts 的字段变化不影响编号分配，仅行数与采集地/年份影响
-  }, [drafts.length, drafts, site?.code, year, specimens])
+  }, [drafts, specimens, team])
 
   const patchDraft = (id: string, patch: Partial<DraftRow>): void => {
     setDrafts((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
@@ -75,22 +92,26 @@ export default function CollectPage(): JSX.Element {
 
   const submit = async (): Promise<void> => {
     if (!site) {
-      setError('请先选择采集地（标本编号需要采集地代码）')
+      setError('请先选择采集地（馆藏号交接时需要采集地代码作前缀）')
+      return
+    }
+    if (!team.trim()) {
+      setError('请填写采集队名（现场编号只在队内查重，不同队可以同号）')
       return
     }
     if (drafts.length === 0) {
       setError('至少登记一条标本')
       return
     }
-    const codesInBatch = Object.values(codes)
-    const duplicated = codesInBatch.filter((code, index) => codesInBatch.indexOf(code) !== index)
-    if (duplicated.length > 0) {
-      setError(`批次内编号重复：${duplicated.join('、')}`)
+    const fieldNos = drafts.map((draft) => resolvedFieldNos[draft.id] ?? draft.fieldNo.trim())
+    const batchDuplicates = fieldNos.filter((no, index) => fieldNos.indexOf(no) !== index)
+    if (batchDuplicates.length > 0) {
+      setError(`本批次内现场编号重复：${Array.from(new Set(batchDuplicates)).join('、')}`)
       return
     }
-    const clash = codesInBatch.find((code) => isDuplicateCode(code, specimens.map((item) => item.code)))
+    const clash = fieldNos.find((no) => isDuplicateFieldNo(team, no, specimens))
     if (clash) {
-      setError(`编号 ${clash} 已存在，请调整采集地或年份`)
+      setError(`采集队「${team.trim()}」的现场编号 ${clash} 已存在（不同队之间允许同号）`)
       return
     }
     if (drafts.some((row) => !row.order.trim())) {
@@ -100,7 +121,10 @@ export default function CollectPage(): JSX.Element {
     setError('')
     const rows: Specimen[] = drafts.map((draft) => ({
       id: uid('sp'),
-      code: codes[draft.id],
+      team: team.trim(),
+      fieldNo: resolvedFieldNos[draft.id] ?? draft.fieldNo.trim(),
+      fieldNoHistory: [],
+      accessionNo: '',
       order: draft.order.trim(),
       family: draft.family.trim(),
       genus: draft.genus.trim(),
@@ -120,7 +144,11 @@ export default function CollectPage(): JSX.Element {
     }))
     await specimenStore.getState().saveMany(rows)
     setJustCreated(rows)
-    setMessage(`本批次已登记 ${rows.length} 份标本，编号：${rows.map((row) => row.code).join('、')}`)
+    setMessage(
+      `本批次已登记 ${rows.length} 份标本（${team.trim()}），现场编号：${rows
+        .map((row) => row.fieldNo)
+        .join('、')}；馆藏号待馆队交接后配发。`
+    )
     setDrafts([newDraft()])
   }
 
@@ -129,7 +157,8 @@ export default function CollectPage(): JSX.Element {
       <header>
         <h1 className="page-title">采集登记</h1>
         <p className="page-sub">
-          选择采集地后自动带出生境与小生境；支持一次提交多条同批次标本，编号按「采集地代码-年份-流水号」自动生成并查重。
+          各采集队按自己的规则编现场编号（仅队内查重，不同队同号互不影响）；选择采集地后自动带出生境信息。
+          馆藏号由馆方在「馆队交接」时统一配发。
         </p>
       </header>
 
@@ -157,9 +186,13 @@ export default function CollectPage(): JSX.Element {
         </div>
 
         <div className="panel flex flex-col gap-3">
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-3">
             <div>
-              <span className="field-label">采集日期（决定编号年份）</span>
+              <span className="field-label">采集队名（现场编号的命名空间）</span>
+              <input className="field-input" value={team} onChange={(e) => setTeam(e.target.value)} placeholder="如 黔南一队" />
+            </div>
+            <div>
+              <span className="field-label">采集日期（决定馆藏号年份）</span>
               <input type="date" className="field-input" value={collectDate} onChange={(e) => setCollectDate(e.target.value)} />
             </div>
             <div>
@@ -179,14 +212,16 @@ export default function CollectPage(): JSX.Element {
             >
               - 减少一条
             </button>
-            <span className="text-xs text-slate-500">本批次 {drafts.length} 条，编号年份 {year}</span>
+            <span className="text-xs text-slate-500">
+              本批次 {drafts.length} 条 · 采集队 {team.trim() || '未填'} · 现场编号留空则采用队内建议号
+            </span>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full min-w-[880px] border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-50 text-left text-xs text-slate-500">
-                  <th className="border border-slate-200 px-2 py-1">标本编号</th>
+                  <th className="border border-slate-200 px-2 py-1">现场编号</th>
                   <th className="border border-slate-200 px-2 py-1">目</th>
                   <th className="border border-slate-200 px-2 py-1">科</th>
                   <th className="border border-slate-200 px-2 py-1">属</th>
@@ -203,8 +238,17 @@ export default function CollectPage(): JSX.Element {
               <tbody>
                 {drafts.map((draft) => (
                   <tr key={draft.id}>
-                    <td className="border border-slate-200 px-2 py-1 font-mono text-xs text-field-700" data-testid="draft-code">
-                      {codes[draft.id]}
+                    <td className="border border-slate-200 px-2 py-1">
+                      <input
+                        className="field-input w-28 font-mono text-xs"
+                        value={draft.fieldNo}
+                        onChange={(e) => patchDraft(draft.id, { fieldNo: e.target.value })}
+                        placeholder={resolvedFieldNos[draft.id]}
+                        data-testid="draft-field-no"
+                      />
+                      {!draft.fieldNo.trim() ? (
+                        <span className="mt-0.5 block text-[10px] text-slate-400">建议 {resolvedFieldNos[draft.id]}</span>
+                      ) : null}
                     </td>
                     <td className="border border-slate-200 px-1 py-1">
                       <select className="field-input" value={draft.order} onChange={(e) => patchDraft(draft.id, { order: e.target.value })}>
@@ -305,7 +349,7 @@ export default function CollectPage(): JSX.Element {
 
       {justCreated.length > 0 ? (
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold text-slate-700">刚刚登记入库的标本</h2>
+          <h2 className="text-sm font-semibold text-slate-700">刚刚登记的现场标本（待交接）</h2>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {justCreated.map((specimen) => (
               <SpecimenCard key={specimen.id} specimen={specimen} site={site} />

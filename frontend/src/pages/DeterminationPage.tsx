@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { Confidence, DetStatus, Determination, Specimen } from '@/types'
+import type { Confidence, DetStatus, Determination } from '@/types'
 import { CONFIDENCES } from '@/types'
 import StatusTag from '@/components/common/StatusTag'
 import { usePersistentStore } from '@/hooks/usePersistentStore'
@@ -12,18 +12,23 @@ import { uid } from '@/utils/id'
 
 const QUEUE_STATUSES: DetStatus[] = ['待鉴定', '初鉴', '待复核']
 
-/** 鉴定工作流：待鉴定队列逐条处理，落鉴定记录并推进标本状态 */
+/** 鉴定工作流：鉴定认馆藏号，只有交接配号后的标本进入鉴定队列 */
 export default function DeterminationPage(): JSX.Element {
   const specimens = usePersistentStore(specimenStore, (state) => state.rows)
   const sites = usePersistentStore(siteStore, (state) => state.rows)
   const determinations = usePersistentStore(determinationStore, (state) => state.rows)
 
+  // 鉴定环节认馆藏号：未交接（无馆藏号）的标本不进鉴定队列
   const queue = useMemo(
-    () => specimens.filter((item) => QUEUE_STATUSES.includes(item.status)),
+    () => specimens.filter((item) => item.accessionNo && QUEUE_STATUSES.includes(item.status)),
+    [specimens]
+  )
+  const waitingHandover = useMemo(
+    () => specimens.filter((item) => !item.accessionNo),
     [specimens]
   )
   const [activeId, setActiveId] = useState('')
-  const active = specimens.find((item) => item.id === activeId) ?? queue[0] ?? null
+  const active = specimens.find((item) => item.id === activeId && item.accessionNo) ?? queue[0] ?? null
 
   const [determiner, setDeterminer] = useState('')
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
@@ -38,7 +43,9 @@ export default function DeterminationPage(): JSX.Element {
   const historyOf = (specimenId: string): Determination[] =>
     determinations.filter((item) => item.specimenId === specimenId)
 
-  const pick = (specimen: Specimen): void => {
+  const pick = (specimenId: string): void => {
+    const specimen = specimens.find((item) => item.id === specimenId)
+    if (!specimen) return
     setActiveId(specimen.id)
     setConclusion([specimen.genus, specimen.species].filter(Boolean).join(' '))
     setNeedReview(specimen.status === '待复核')
@@ -75,7 +82,7 @@ export default function DeterminationPage(): JSX.Element {
       determiner: determiner.trim()
     })
     setMessage(
-      `${active.code} 已落鉴定记录：${record.conclusion}（置信度 ${record.confidence}，状态更新为${
+      `${active.accessionNo}（${active.team}·现场${active.fieldNo}）已落鉴定记录：${record.conclusion}（置信度 ${record.confidence}，状态更新为${
         needReview ? '待复核' : '已鉴定'
       }）`
     )
@@ -89,7 +96,9 @@ export default function DeterminationPage(): JSX.Element {
     const rows = determinations.map((item) => {
       const specimen = specimens.find((sp) => sp.id === item.specimenId)
       return {
-        code: specimen?.code ?? item.specimenId,
+        accessionNo: specimen?.accessionNo ?? '',
+        team: specimen?.team ?? '',
+        fieldNo: specimen?.fieldNo ?? item.specimenId,
         determiner: item.determiner,
         date: item.date,
         conclusion: item.conclusion,
@@ -99,7 +108,9 @@ export default function DeterminationPage(): JSX.Element {
       }
     })
     downloadCsv('鉴定记录.csv', rows as unknown as Record<string, unknown>[], [
-      { key: 'code', label: '标本编号' },
+      { key: 'accessionNo', label: '馆藏号' },
+      { key: 'team', label: '采集队' },
+      { key: 'fieldNo', label: '现场编号' },
       { key: 'determiner', label: '鉴定人' },
       { key: 'date', label: '鉴定日期' },
       { key: 'conclusion', label: '鉴定结论' },
@@ -115,7 +126,7 @@ export default function DeterminationPage(): JSX.Element {
         <div>
           <h1 className="page-title">鉴定工作流</h1>
           <p className="page-sub">
-            待鉴定队列逐条处理：填写结论与依据文献后落鉴定记录，标本状态自动推进为「已鉴定」或「待复核」。
+            鉴定认馆藏号：只有馆队交接、配到馆藏号的标本进入待鉴定队列；填写结论后落记录并推进状态。
           </p>
         </div>
         <button className="btn-ghost" type="button" onClick={exportHistory}>
@@ -131,14 +142,17 @@ export default function DeterminationPage(): JSX.Element {
               <button
                 key={specimen.id}
                 type="button"
-                onClick={() => pick(specimen)}
+                onClick={() => pick(specimen.id)}
                 className={`mb-1.5 w-full rounded-lg border px-3 py-2 text-left transition ${
                   active?.id === specimen.id ? 'border-field-500 bg-field-50' : 'border-slate-200 hover:bg-slate-50'
                 }`}
               >
                 <span className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-xs text-field-700">{specimen.code}</span>
+                  <span className="font-mono text-xs text-field-700">{specimen.accessionNo}</span>
                   <StatusTag status={specimen.status} />
+                </span>
+                <span className="mt-0.5 block text-[11px] text-slate-400">
+                  {specimen.team} · 现场 {specimen.fieldNo}
                 </span>
                 <span className="mt-0.5 block text-xs text-slate-600">{specimenTaxon(specimen)}</span>
                 <span className="block text-[11px] text-slate-400">
@@ -146,19 +160,24 @@ export default function DeterminationPage(): JSX.Element {
                 </span>
               </button>
             ))}
-            {queue.length === 0 ? <p className="text-sm text-slate-400">队列已清空，所有标本都已处理</p> : null}
+            {queue.length === 0 ? (
+              <p className="text-sm text-slate-400">
+                队列已清空
+                {waitingHandover.length > 0 ? `（另有 ${waitingHandover.length} 份未交接，需先配馆藏号）` : ''}
+              </p>
+            ) : null}
           </div>
         </div>
 
         <div className="flex flex-col gap-4">
           <div className="panel">
             <h2 className="text-sm font-semibold text-slate-700">
-              {active ? `处理 ${active.code}` : '请从左侧队列选择标本'}
+              {active ? `处理 ${active.accessionNo}` : '请从左侧队列选择标本'}
             </h2>
             {active ? (
               <p className="mt-1 text-xs text-slate-500">
-                {specimenTaxon(active)} · {siteName(active.siteId)} · 采集人 {active.collector || '—'} · 采集方式{' '}
-                {active.method} · 体长 {active.bodyLength} mm
+                {active.team} · 现场编号 {active.fieldNo} ｜ {specimenTaxon(active)} · {siteName(active.siteId)} · 采集人{' '}
+                {active.collector || '—'} · 采集方式 {active.method} · 体长 {active.bodyLength} mm
               </p>
             ) : null}
             <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -240,7 +259,8 @@ export default function DeterminationPage(): JSX.Element {
           <table className="w-full min-w-[760px] border-collapse text-sm">
             <thead>
               <tr className="bg-slate-50 text-left text-xs text-slate-500">
-                <th className="border border-slate-200 px-2 py-1">标本编号</th>
+                <th className="border border-slate-200 px-2 py-1">馆藏号</th>
+                <th className="border border-slate-200 px-2 py-1">现场编号</th>
                 <th className="border border-slate-200 px-2 py-1">鉴定人</th>
                 <th className="border border-slate-200 px-2 py-1">日期</th>
                 <th className="border border-slate-200 px-2 py-1">结论</th>
@@ -255,7 +275,12 @@ export default function DeterminationPage(): JSX.Element {
                 const specimen = specimens.find((item) => item.id === record.specimenId)
                 return (
                   <tr key={record.id}>
-                    <td className="border border-slate-200 px-2 py-1 font-mono text-xs">{specimen?.code ?? '—'}</td>
+                    <td className="border border-slate-200 px-2 py-1 font-mono text-xs text-field-700">
+                      {specimen?.accessionNo || '—'}
+                    </td>
+                    <td className="border border-slate-200 px-2 py-1 font-mono text-xs text-slate-500">
+                      {specimen ? `${specimen.team}·${specimen.fieldNo}` : '—'}
+                    </td>
                     <td className="border border-slate-200 px-2 py-1">{record.determiner}</td>
                     <td className="border border-slate-200 px-2 py-1">{record.date}</td>
                     <td className="border border-slate-200 px-2 py-1">{record.conclusion}</td>

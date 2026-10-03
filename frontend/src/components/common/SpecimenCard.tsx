@@ -16,7 +16,7 @@ export interface SpecimenCardProps {
   footer?: ReactNode
 }
 
-/** 标本摘要卡片：分类阶元 + 采集地 + 鉴定状态 */
+/** 标本摘要卡片：馆藏号为主标识，队名+现场编号为辅 */
 export default function SpecimenCard({
   specimen,
   site,
@@ -26,6 +26,7 @@ export default function SpecimenCard({
   onOpen,
   footer
 }: SpecimenCardProps): JSX.Element {
+  const accessioned = specimen.accessionNo.trim() !== ''
   return (
     <article
       data-testid="specimen-card"
@@ -38,7 +39,7 @@ export default function SpecimenCard({
           {selectable ? (
             <input
               type="checkbox"
-              aria-label={`选择标本 ${specimen.code}`}
+              aria-label={`选择标本 ${specimen.accessionNo || specimen.fieldNo}`}
               className="mt-1 h-4 w-4 accent-field-600"
               checked={selected}
               onChange={() => onToggle?.(specimen.id)}
@@ -49,9 +50,13 @@ export default function SpecimenCard({
               type="button"
               onClick={() => onOpen?.(specimen)}
               className="text-left font-mono text-sm font-semibold text-field-700 hover:underline"
+              data-testid="specimen-accession-no"
             >
-              {specimen.code}
+              {accessioned ? specimen.accessionNo : '待交接'}
             </button>
+            <p className="font-mono text-[11px] text-slate-500">
+              {specimen.team} · 现场 {specimen.fieldNo}
+            </p>
             <p className="text-sm text-slate-700">{specimenTaxon(specimen)}</p>
             <p className="text-xs text-slate-500">
               {specimen.order}
@@ -82,6 +87,11 @@ export default function SpecimenCard({
           <dd>{specimen.collector || '—'}</dd>
         </div>
       </dl>
+      {specimen.fieldNoHistory.length > 0 ? (
+        <p className="rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="field-no-history">
+          现场编号旧称：{specimen.fieldNoHistory.map((item) => item.value).join('、')}（馆藏号 {accessioned ? specimen.accessionNo : '尚未配发'} 不变）
+        </p>
+      ) : null}
       {specimen.note ? <p className="rounded-lg bg-slate-50 px-2 py-1 text-xs text-slate-500">{specimen.note}</p> : null}
       {footer ? <footer className="mt-1 flex flex-wrap gap-2">{footer}</footer> : null}
     </article>

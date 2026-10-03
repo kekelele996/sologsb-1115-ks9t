@@ -1,5 +1,14 @@
 export { COLLECT_METHODS, DET_STATUSES, SEXES, STAGES, ORDERS } from './specimen'
-export type { Specimen, CollectMethod, DetStatus, Sex, Stage } from './specimen'
+export type {
+  Specimen,
+  CollectMethod,
+  DetStatus,
+  Sex,
+  Stage,
+  FieldNoChange
+} from './specimen'
+export type { Accession } from './accession'
+export type { HandoverBatch, HandoverLineResult, HandoverLineStatus } from './handover'
 export { HABITATS, distanceMeters, findNearbySites } from './site'
 export type { CollectSite, Habitat } from './site'
 export { STORAGE_METHODS } from './storage'

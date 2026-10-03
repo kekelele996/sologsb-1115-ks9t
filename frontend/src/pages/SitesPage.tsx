@@ -71,7 +71,7 @@ export default function SitesPage(): JSX.Element {
       return
     }
     if (sites.some((site) => site.code.toUpperCase() === form.code.trim().toUpperCase() && site.id !== form.id)) {
-      setError(`采集地代码「${form.code}」已存在，请换一个（标本编号依赖它）`)
+      setError(`采集地代码「${form.code}」已存在，请换一个（馆队交接配馆藏号时用它作前缀）`)
       return
     }
     setError('')
@@ -144,7 +144,7 @@ export default function SitesPage(): JSX.Element {
 
       <section className="panel grid gap-3 md:grid-cols-3">
         <div>
-          <span className="field-label">采集地代码（用于标本编号前缀）</span>
+          <span className="field-label">采集地代码（馆藏号前缀）</span>
           <input className="field-input" value={form.code} onChange={(e) => patch({ code: e.target.value })} placeholder="如 QLB" />
         </div>
         <div>

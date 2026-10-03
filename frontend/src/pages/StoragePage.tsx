@@ -10,7 +10,7 @@ import { siteStore } from '@/stores/siteStore'
 import { encodeSlot, findSlotConflicts, specimenTaxon, storageSlotText } from '@/utils/codec'
 import { uid } from '@/utils/id'
 
-/** 保藏柜位图：柜-抽屉-盒-位三级展开，拖拽调整插位，重复占用给出提示 */
+/** 保藏柜位图：柜位认馆藏号，只有交接配号后的标本可入柜 */
 export default function StoragePage(): JSX.Element {
   const specimens = usePersistentStore(specimenStore, (state) => state.rows)
   const storages = usePersistentStore(storageStore, (state) => state.rows)
@@ -28,15 +28,24 @@ export default function StoragePage(): JSX.Element {
   const [warning, setWarning] = useState('')
   const [detail, setDetail] = useState<Storage | null>(null)
 
-  const codeOf = (specimenId: string): string => specimens.find((item) => item.id === specimenId)?.code ?? '未知'
+  // 柜位只认馆藏号；理论上未交接标本不会出现在可入柜列表，这里再兜底一次
+  const codeOf = (specimenId: string): string =>
+    specimens.find((item) => item.id === specimenId)?.accessionNo || '未配馆藏号'
   const siteName = (siteId: string): string => sites.find((site) => site.id === siteId)?.name ?? '未关联采集地'
   const placedIds = useMemo(() => new Set(storages.map((item) => item.specimenId)), [storages])
-  const unplaced = specimens.filter((item) => !placedIds.has(item.id))
+  // 未入柜且已交接（有馆藏号）才可拖入柜位
+  const unplaced = specimens.filter((item) => !placedIds.has(item.id) && item.accessionNo)
+  const waitingHandover = specimens.filter((item) => !placedIds.has(item.id) && !item.accessionNo)
 
   const place = async (position: { cabinet: string; drawer: number; box: number; slot: number }): Promise<void> => {
     const specimenId = dragging ?? picked
     if (!specimenId) {
       setWarning('请先在右侧选择或拖动一份未入柜标本')
+      return
+    }
+    const target = specimens.find((item) => item.id === specimenId)
+    if (!target?.accessionNo) {
+      setWarning('该标本尚未馆队交接、没有馆藏号，不能入柜，请先到「馆队交接」配号')
       return
     }
     const candidate: Storage = {
@@ -77,7 +86,7 @@ export default function StoragePage(): JSX.Element {
       <header>
         <h1 className="page-title">保藏柜位图</h1>
         <p className="page-sub">
-          按柜—抽屉—盒三级展开插位，空位虚线显示；拖动标本到插位即可入柜，重复占用会列出已有标本。
+          按柜—抽屉—盒三级展开插位，空位虚线显示；拖动标本到插位即可入柜，柜位上显示的是馆藏号，重复占用会列出已有标本。
         </p>
       </header>
 
@@ -113,7 +122,7 @@ export default function StoragePage(): JSX.Element {
           <input className="field-input w-32" value={handler} onChange={(e) => setHandler(e.target.value)} placeholder="如 覃羽" />
         </div>
         <div className="text-xs text-slate-500">
-          已入柜 {storages.length} 份 · 未入柜 {unplaced.length} 份
+          已入柜 {storages.length} 份 · 待入柜 {unplaced.length} 份 · 未交接 {waitingHandover.length} 份
           {picked ? ` · 当前选中 ${codeOf(picked)}` : ''}
         </div>
       </section>
@@ -149,14 +158,21 @@ export default function StoragePage(): JSX.Element {
                     picked === specimen.id ? 'border-field-500 bg-field-50' : 'border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  <p className="font-mono text-field-700">{specimen.code}</p>
+                  <p className="font-mono text-field-700">{specimen.accessionNo}</p>
+                  <p className="text-[11px] text-slate-400">{specimen.team} · 现场 {specimen.fieldNo}</p>
                   <p className="text-slate-600">{specimenTaxon(specimen)}</p>
                   <p className="text-slate-400">
                     {siteName(specimen.siteId)} · <StatusTag status={specimen.status} />
                   </p>
                 </div>
               ))}
-              {unplaced.length === 0 ? <p className="text-xs text-slate-400">所有标本都已入柜</p> : null}
+              {unplaced.length === 0 ? <p className="text-xs text-slate-400">已交接标本都已入柜</p> : null}
+              {waitingHandover.length > 0 ? (
+                <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+                  另有 {waitingHandover.length} 份标本尚未交接（无馆藏号），不能入柜：
+                  {waitingHandover.map((sp) => `${sp.team}·${sp.fieldNo}`).join('、')}
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -186,7 +202,7 @@ export default function StoragePage(): JSX.Element {
                 柜位 {storageSlotText(detail)} · {detail.method} · 入柜日期 {detail.storedDate} · 经手人{' '}
                 {detail.handler || '—'}
               </p>
-              <p className="text-xs text-slate-600">标本：{codeOf(detail.specimenId)}</p>
+              <p className="text-xs text-slate-600">标本馆藏号：{codeOf(detail.specimenId)}</p>
               <button className="btn-ghost mt-2" type="button" onClick={() => setDetail(null)}>
                 关闭
               </button>

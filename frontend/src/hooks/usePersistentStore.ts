@@ -1,22 +1,46 @@
 import { useStore } from 'zustand'
 import type { StoreApi, UseBoundStore } from 'zustand'
 import Dexie, { type Table } from 'dexie'
-import type { CollectSite, Determination, Specimen, Storage } from '@/types'
+import type { Accession, CollectSite, Determination, HandoverBatch, Specimen, Storage } from '@/types'
 
 /** IndexedDB 数据结构版本号 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface MetaRow {
   key: string
   value: number
 }
 
-/** Dexie 封装：标本 / 采集地 / 保藏位置 / 鉴定记录 四张业务表 + 元数据表 */
+/** v2 及以前的标本结构：两套号挤在同一个 code 字段里 */
+interface LegacySpecimenV2 {
+  id: string
+  code: string
+  order: string
+  family: string
+  genus: string
+  species: string
+  tempName: string
+  collectDate: string
+  collector: string
+  sex: Specimen['sex']
+  stage: Specimen['stage']
+  bodyLength: number
+  method: Specimen['method']
+  quantity: number
+  status: Specimen['status']
+  determiner: string
+  siteId: string
+  note: string
+}
+
+/** Dexie 封装：标本 / 采集地 / 保藏位置 / 鉴定记录 / 配对凭证 / 交接单 / 元数据 */
 class InsectLogDb extends Dexie {
   specimens!: Table<Specimen, string>
   sites!: Table<CollectSite, string>
   storages!: Table<Storage, string>
   determinations!: Table<Determination, string>
+  accessions!: Table<Accession, string>
+  handoverBatches!: Table<HandoverBatch, string>
   meta!: Table<MetaRow, string>
 
   constructor() {
@@ -29,7 +53,7 @@ class InsectLogDb extends Dexie {
       meta: 'key'
     })
     // v2：新增「采集方式」字段，迁移时为历史标本补齐默认采集方式（扫网）
-    this.version(SCHEMA_VERSION)
+    this.version(2)
       .stores({
         specimens: 'id, code, order, family, status, siteId, collectDate',
         sites: 'id, code, name, habitat',
@@ -45,6 +69,58 @@ class InsectLogDb extends Dexie {
             if (!specimen.method) {
               specimen.method = '扫网'
             }
+          })
+      })
+    // v3：两套号分家——标本持有「队名+现场编号」，馆藏号迁到 accessionNo；
+    // 新增 accessions（配对凭证）与 handoverBatches（交接单）两张表。
+    this.version(SCHEMA_VERSION)
+      .stores({
+        specimens: 'id, team, fieldNo, accessionNo, order, family, status, siteId, collectDate, [team+fieldNo]',
+        sites: 'id, code, name, habitat',
+        storages: 'id, specimenId, cabinet, drawer',
+        determinations: 'id, specimenId, determiner, date',
+        accessions: 'id, specimenId, accessionNo, sheetId, [team+fieldNo]',
+        handoverBatches: 'id, sheetId, team',
+        meta: 'key'
+      })
+      .upgrade(async (tx) => {
+        // 先收集再写入：不能在遍历 specimens 的同时往同事务里插凭证
+        const legacies = await tx.table<LegacySpecimenV2, string>('specimens').toArray()
+        const legacyDate = new Date().toISOString().slice(0, 10)
+        const accessions: Accession[] = []
+        const usedAccessionNos = new Set<string>()
+
+        legacies.forEach((legacy) => {
+          // 旧数据第一次打开时迁移出馆藏号：旧 code 本就是馆方格式，直接成为 accessionNo
+          const accessionNo = legacy.code ?? ''
+          if (accessionNo && !usedAccessionNos.has(accessionNo.toUpperCase())) {
+            usedAccessionNos.add(accessionNo.toUpperCase())
+            accessions.push({
+              id: `acc_mig_${legacy.id}`,
+              specimenId: legacy.id,
+              accessionNo,
+              team: '（旧数据迁移）',
+              fieldNo: accessionNo,
+              sheetId: 'legacy-migration',
+              pairedAt: legacyDate
+            })
+          }
+        })
+
+        if (accessions.length > 0) {
+          await tx.table<Accession, string>('accessions').bulkPut(accessions)
+        }
+
+        await tx
+          .table<LegacySpecimenV2, string>('specimens')
+          .toCollection()
+          .modify((legacy) => {
+            const migrated = legacy as unknown as Specimen
+            migrated.team = '（旧数据迁移）'
+            migrated.fieldNo = legacy.code ?? ''
+            migrated.fieldNoHistory = []
+            migrated.accessionNo = legacy.code ?? ''
+            delete (migrated as Partial<LegacySpecimenV2>).code
           })
       })
   }
@@ -132,10 +208,14 @@ export async function seedDemoData(): Promise<void> {
     }
   ])
 
+  // 示例：两队各自编号——「一队」与「二队」都编了 001，馆方交接后各得各的馆藏号
   await db.specimens.bulkPut([
     {
       id: 'sp_001',
-      code: 'QLB-2026-0001',
+      team: '黔南一队',
+      fieldNo: '001',
+      fieldNoHistory: [],
+      accessionNo: 'QLB-2026-0001',
       order: '鞘翅目',
       family: '步甲科',
       genus: 'Carabus',
@@ -155,7 +235,10 @@ export async function seedDemoData(): Promise<void> {
     },
     {
       id: 'sp_002',
-      code: 'QLB-2026-0002',
+      team: '黔南一队',
+      fieldNo: '002',
+      fieldNoHistory: [],
+      accessionNo: 'QLB-2026-0002',
       order: '鳞翅目',
       family: '夜蛾科',
       genus: '',
@@ -175,7 +258,10 @@ export async function seedDemoData(): Promise<void> {
     },
     {
       id: 'sp_003',
-      code: 'SHR-2026-0001',
+      team: '黔南二队',
+      fieldNo: '001',
+      fieldNoHistory: [],
+      accessionNo: 'SHR-2026-0001',
       order: '蜻蜓目',
       family: '蜻科',
       genus: 'Sympetrum',
@@ -195,7 +281,10 @@ export async function seedDemoData(): Promise<void> {
     },
     {
       id: 'sp_004',
-      code: 'SHR-2026-0002',
+      team: '黔南二队',
+      fieldNo: '002',
+      fieldNoHistory: [],
+      accessionNo: '',
       order: '双翅目',
       family: '摇蚊科',
       genus: '',
@@ -211,7 +300,37 @@ export async function seedDemoData(): Promise<void> {
       status: '待鉴定',
       determiner: '',
       siteId: 'site_shr',
-      note: '酒精浸液保存，待制片'
+      note: '酒精浸液保存，待制片（尚未交接，暂无馆藏号）'
+    }
+  ])
+
+  await db.accessions.bulkPut([
+    {
+      id: 'acc_001',
+      specimenId: 'sp_001',
+      accessionNo: 'QLB-2026-0001',
+      team: '黔南一队',
+      fieldNo: '001',
+      sheetId: 'HD-20261003-01',
+      pairedAt: today
+    },
+    {
+      id: 'acc_002',
+      specimenId: 'sp_002',
+      accessionNo: 'QLB-2026-0002',
+      team: '黔南一队',
+      fieldNo: '002',
+      sheetId: 'HD-20261003-01',
+      pairedAt: today
+    },
+    {
+      id: 'acc_003',
+      specimenId: 'sp_003',
+      accessionNo: 'SHR-2026-0001',
+      team: '黔南二队',
+      fieldNo: '001',
+      sheetId: 'HD-20261003-02',
+      pairedAt: today
     }
   ])
 

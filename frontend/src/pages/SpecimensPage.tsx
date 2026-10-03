@@ -11,7 +11,7 @@ import { siteStore } from '@/stores/siteStore'
 import { downloadCsv } from '@/utils/export'
 import { specimenTaxon } from '@/utils/codec'
 
-/** 标本清单：组合筛选 + 多选批量推进鉴定状态 */
+/** 标本清单：组合筛选 + 多选批量推进鉴定状态；导出认馆藏号 */
 export default function SpecimensPage(): JSX.Element {
   const specimens = usePersistentStore(specimenStore, (state) => state.rows)
   const sites = usePersistentStore(siteStore, (state) => state.rows)
@@ -19,6 +19,11 @@ export default function SpecimensPage(): JSX.Element {
   const [selected, setSelected] = useState<string[]>([])
   const [batchStatus, setBatchStatus] = useState<DetStatus>('初鉴')
   const [message, setMessage] = useState('')
+
+  // 修改现场编号
+  const [renaming, setRenaming] = useState<Specimen | null>(null)
+  const [nextFieldNo, setNextFieldNo] = useState('')
+  const [renameError, setRenameError] = useState('')
 
   const siteMap = useMemo(() => new Map(sites.map((site) => [site.id, site])), [sites])
   const selectedSet = useMemo(() => new Set(selected), [selected])
@@ -43,7 +48,9 @@ export default function SpecimensPage(): JSX.Element {
 
   const exportList = (): void => {
     const rows = filtered.map((item: Specimen) => ({
-      code: item.code,
+      accessionNo: item.accessionNo || '',
+      team: item.team,
+      fieldNo: item.fieldNo,
       taxon: specimenTaxon(item),
       site: siteMap.get(item.siteId)?.name ?? '',
       collectDate: item.collectDate,
@@ -53,7 +60,9 @@ export default function SpecimensPage(): JSX.Element {
       determiner: item.determiner
     }))
     downloadCsv('标本清单.csv', rows as unknown as Record<string, unknown>[], [
-      { key: 'code', label: '标本编号' },
+      { key: 'accessionNo', label: '馆藏号' },
+      { key: 'team', label: '采集队' },
+      { key: 'fieldNo', label: '现场编号' },
       { key: 'taxon', label: '分类阶元' },
       { key: 'site', label: '采集地' },
       { key: 'collectDate', label: '采集日期' },
@@ -64,6 +73,27 @@ export default function SpecimensPage(): JSX.Element {
     ])
   }
 
+  const openRename = (specimen: Specimen): void => {
+    setRenaming(specimen)
+    setNextFieldNo(specimen.fieldNo)
+    setRenameError('')
+  }
+
+  const confirmRename = async (): Promise<void> => {
+    if (!renaming) return
+    const outcome = await specimenStore.getState().renameFieldNo(renaming.id, nextFieldNo)
+    if (!outcome.ok) {
+      setRenameError(outcome.message ?? '修改失败')
+      return
+    }
+    setMessage(
+      `现场编号已由「${renaming.fieldNo}」改为「${nextFieldNo.trim()}」，旧号已留痕；馆藏号 ${
+        renaming.accessionNo || '尚未配发'
+      } 不变。`
+    )
+    setRenaming(null)
+  }
+
   const statusCount = (status: DetStatus): number => specimens.filter((item) => item.status === status).length
 
   return (
@@ -72,12 +102,15 @@ export default function SpecimensPage(): JSX.Element {
         <div>
           <h1 className="page-title">标本清单</h1>
           <p className="page-sub">
-            按目/科、鉴定状态与采集日期区间筛选，多选后可批量推进鉴定状态；编号规则为「采集地代码-年份-流水号」。
+            馆藏号是馆方主标识（柜位、鉴定、导出都认它）；采集队名+现场编号仅作现场追溯，可在卡片上修改，旧号自动留痕。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Link className="btn-ghost" to="/collect">
             去采集登记
+          </Link>
+          <Link className="btn-ghost" to="/handover">
+            去馆队交接
           </Link>
           <button className="btn-ghost" type="button" onClick={exportList}>
             导出命中清单
@@ -160,11 +193,11 @@ export default function SpecimensPage(): JSX.Element {
             onChange={(e) => setFilter({ dateTo: e.target.value })}
           />
         </div>
-        <div className="min-w-[200px] flex-1">
-          <span className="field-label">关键字（编号/学名/暂定名/采集人）</span>
+        <div className="min-w-[220px] flex-1">
+          <span className="field-label">关键字（馆藏号/队名/现场号/学名/暂定名/采集人）</span>
           <input
             className="field-input"
-            placeholder="如 QLB-2026 / 步甲 / 陆昀"
+            placeholder="如 QLB-2026 / 黔南一队 / 步甲 / 陆昀"
             value={filter.keyword}
             onChange={(e) => setFilter({ keyword: e.target.value })}
           />
@@ -216,6 +249,9 @@ export default function SpecimensPage(): JSX.Element {
             onToggle={toggle}
             footer={
               <>
+                <button className="btn-ghost" type="button" onClick={() => openRename(specimen)}>
+                  改现场编号
+                </button>
                 <Link className="btn-ghost" to="/determination">
                   去鉴定
                 </Link>
@@ -232,6 +268,48 @@ export default function SpecimensPage(): JSX.Element {
           </p>
         ) : null}
       </section>
+
+      {renaming ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="panel w-full max-w-md">
+            <h2 className="text-sm font-semibold text-slate-800">修改现场编号（采集队侧）</h2>
+            <dl className="mt-2 space-y-1 text-xs text-slate-600">
+              <div>采集队：{renaming.team}</div>
+              <div>
+                现现场编号：<span className="font-mono">{renaming.fieldNo}</span>
+              </div>
+              <div>
+                馆藏号：
+                <span className="font-mono text-field-700">{renaming.accessionNo || '尚未配发'}</span>
+                <span className="text-slate-400">（改现场号不会动馆藏号）</span>
+              </div>
+              {renaming.fieldNoHistory.length > 0 ? (
+                <div>旧号留痕：{renaming.fieldNoHistory.map((item) => `${item.value}（${item.changedAt}）`).join('、')}</div>
+              ) : null}
+            </dl>
+            <input
+              className="field-input mt-3 font-mono text-sm"
+              value={nextFieldNo}
+              autoFocus
+              onChange={(e) => setNextFieldNo(e.target.value)}
+              data-testid="rename-field-no-input"
+            />
+            {renameError ? <p className="mt-2 text-xs text-rose-600">{renameError}</p> : null}
+            <div className="mt-3 flex gap-2">
+              <button className="btn-primary" type="button" onClick={() => void confirmRename()}>
+                确认修改（旧号留痕）
+              </button>
+              <button className="btn-ghost" type="button" onClick={() => setRenaming(null)}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
